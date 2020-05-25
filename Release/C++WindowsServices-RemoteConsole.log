@@ -1,0 +1,3 @@
+﻿mc : error : 0x2 trying to open file <ServiceSample.mc>.
+C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\MSBuild\Microsoft\VC\v160\Microsoft.CppCommon.targets(139,5): error MSB3073: выход из команды "mc -U ServiceSample.mc
+C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\MSBuild\Microsoft\VC\v160\Microsoft.CppCommon.targets(139,5): error MSB3073: :VCEnd" с кодом 1.
