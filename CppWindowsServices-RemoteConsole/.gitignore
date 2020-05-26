@@ -1,0 +1,7 @@
+x64/
+Debug/
+Release/
+MSG00409.bin
+CppWindowsServices-RemoteConsole.vcxproj*
+../.vs/
+.vs/
