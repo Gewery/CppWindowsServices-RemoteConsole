@@ -1,9 +1,8 @@
 #define WIN32_LEAN_AND_MEAN
-
+#define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <stdlib.h>
 #include <stdio.h>
 
 
@@ -14,25 +13,65 @@
 
 
 #define DEFAULT_BUFLEN 512
-#define DEFAULT_PORT "27015"
+#define DEFAULT_OUTPUT_PORT "27015"
+#define DEFAULT_INPUT_PORT "27016"
 
-int socket_client(int argc, char** argv)
-{
-    WSADATA wsaData;
-    SOCKET ConnectSocket = INVALID_SOCKET;
-    struct addrinfo* result = NULL,
-        * ptr = NULL,
-        hints;
-    const char* sendbuf = "dir\n\n";
-    char recvbuf[DEFAULT_BUFLEN];
+DWORD WINAPI sendingMessages(LPVOID sOutputSocket) {
+    char sendbuf[1024];
+    //char* sendbuf;
     int iResult;
-    int recvbuflen = DEFAULT_BUFLEN;
 
-    // Validate the parameters
-    if (argc != 2) {
-        printf("usage: %s server-name\n", argv[0]);
-        return 1;
-    }
+    // Send until the connection closes
+    do {
+        //scanf("%s", sendbuf);
+        fgets(sendbuf, 1024, stdin);
+        //sendbuf = (char*)"dir\n";
+
+        // Send a buffer
+        iResult = send((SOCKET)(sOutputSocket), sendbuf, (int)strlen(sendbuf), 0);
+        if (iResult == SOCKET_ERROR) {
+            printf("send failed with error: %d\n", WSAGetLastError());
+            closesocket((SOCKET)(sOutputSocket));
+            WSACleanup();
+            return 1;
+        }
+
+        //printf("Bytes Sent: %ld\n", iResult);
+    } while (iResult > 0);
+
+    return 0;
+}
+
+DWORD WINAPI recievingMessages(LPVOID sInputSocket) {
+    char recvbuf[DEFAULT_BUFLEN];
+    int recvbuflen = DEFAULT_BUFLEN;
+    int iResult;
+
+    //printf("receiving starting...\n");
+    // Receive until the peer closes the connection
+    do {
+        iResult = recv((SOCKET)(sInputSocket), recvbuf, recvbuflen, 0);
+        //printf("received something...\n");
+        if (iResult == 0)
+            printf("Connection closed\n");
+        else if (iResult < 0)
+            printf("recv failed with error: %d\n", WSAGetLastError());
+
+        for (int i = 0; i < iResult; i++)
+            printf("%c", recvbuf[i]);
+
+    } while (iResult > 0);
+    //printf("receiving finished\n");
+
+    return 0;
+}
+
+int establishConnection(SOCKET &ConnectSocket, char* ip, char* port_number) {
+    WSADATA wsaData;
+    struct addrinfo* result = NULL, 
+        * ptr = NULL, 
+        hints;
+    int iResult;
 
     // Initialize Winsock
     iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
@@ -47,7 +86,7 @@ int socket_client(int argc, char** argv)
     hints.ai_protocol = IPPROTO_TCP;
 
     // Resolve the server address and port
-    iResult = getaddrinfo(argv[1], DEFAULT_PORT, &hints, &result);
+    iResult = getaddrinfo(ip, port_number, &hints, &result);
     if (iResult != 0) {
         printf("getaddrinfo failed with error: %d\n", iResult);
         WSACleanup();
@@ -83,43 +122,66 @@ int socket_client(int argc, char** argv)
         WSACleanup();
         return 1;
     }
+}
 
-    // Send an initial buffer
-    iResult = send(ConnectSocket, sendbuf, (int)strlen(sendbuf), 0);
-    if (iResult == SOCKET_ERROR) {
-        printf("send failed with error: %d\n", WSAGetLastError());
-        closesocket(ConnectSocket);
-        WSACleanup();
-        return 1;
+int socket_client(int argc, char* argv[])
+{
+    SOCKET sOutputSocket = INVALID_SOCKET;
+    establishConnection(sOutputSocket, argv[1], (char*)DEFAULT_OUTPUT_PORT);
+    SOCKET sInputSocket = INVALID_SOCKET;
+    establishConnection(sInputSocket, argv[1], (char*)DEFAULT_INPUT_PORT);
+
+    DWORD dwSendingThreadId;
+    HANDLE hSendingThread = CreateThread(
+        NULL,              // no security attribute 
+        0,                 // default stack size 
+        sendingMessages,    // thread proc
+        (LPVOID)(sOutputSocket),    // thread parameter 
+        0,                 // not suspended 
+        &dwSendingThreadId);      // returns thread ID 
+
+    if (hSendingThread == NULL)
+    {
+        printf("CreateThread for sending failed, GLE=%d.\n", GetLastError());
+        return -1;
+    }
+    
+    DWORD dwRecievingThreadId;
+    HANDLE hRecievingThread = CreateThread(
+        NULL,              // no security attribute 
+        0,                 // default stack size 
+        recievingMessages,    // thread proc
+        (LPVOID)(sInputSocket),    // thread parameter 
+        0,                 // not suspended 
+        &dwRecievingThreadId);      // returns thread ID 
+    
+    if (hRecievingThread == NULL)
+    {
+        printf("CreateThread for recieving failed, GLE=%d.\n", GetLastError());
+        return -1;
     }
 
-    printf("Bytes Sent: %ld\n", iResult);
+    // Wait for threads stops
+    WaitForSingleObject(hRecievingThread, INFINITE);
+    WaitForSingleObject(hSendingThread, INFINITE);
+
+
+    CloseHandle(hRecievingThread);
+    CloseHandle(hSendingThread);
+
 
     // shutdown the connection since no more data will be sent
-    //iResult = shutdown(ConnectSocket, SD_SEND);
-    //if (iResult == SOCKET_ERROR) {
-    //    printf("shutdown failed with error: %d\n", WSAGetLastError());
-    //    closesocket(ConnectSocket);
-    //    WSACleanup();
-    //    return 1;
-    //}
-
-    // Receive until the peer closes the connection
-    do {
-
-        iResult = recv(ConnectSocket, recvbuf, recvbuflen, 0);
-        if (iResult == 0)
-            printf("Connection closed\n");
-        else if (iResult < 0)
-            printf("recv failed with error: %d\n", WSAGetLastError());
-
-        for (int i = 0; i < iResult; i++)
-            printf("%c", recvbuf[i]);
-
-    } while (iResult > 0);
+//iResult = shutdown(ConnectSocket, SD_SEND);
+//if (iResult == SOCKET_ERROR) {
+//    printf("shutdown failed with error: %d\n", WSAGetLastError());
+//    closesocket(ConnectSocket);
+//    WSACleanup();
+//    return 1;
+//}
 
     // cleanup
-    closesocket(ConnectSocket);
+    closesocket(sOutputSocket);
+    closesocket(sInputSocket);
     WSACleanup();
 
     return 0;

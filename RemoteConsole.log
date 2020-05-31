@@ -1,0 +1,52 @@
+Initialized
+ failed with 0 
+
+->Start of parent execution.
+ failed with 0 
+Input Socket SetUp failed with 10093 
+Initialized
+ failed with 0 
+
+->Start of parent execution.
+ failed with 0 
+Input Socket SetUp failed with 10093 
+Initialized
+ failed with 0 
+
+->Start of parent execution.
+ failed with 0 
+
+->End of parent execution.
+ failed with 6 
+RecieveMessage failed with 10004 
+WriteFile failed with 87 
+Initialized
+ failed with 0 
+
+->Start of parent execution.
+ failed with 0 
+RecieveMessage failed with 10054 
+WriteFile failed with 87 
+
+->End of parent execution.
+ failed with 6 
+Initialized
+ failed with 0 
+
+->Start of parent execution.
+ failed with 0 
+RecieveMessage failed with 10054 
+WriteFile failed with 87 
+
+->End of parent execution.
+ failed with 6 
+Initialized
+ failed with 0 
+
+->Start of parent execution.
+ failed with 0 
+RecieveMessage failed with 10054 
+WriteFile failed with 87 
+
+->End of parent execution.
+ failed with 6 

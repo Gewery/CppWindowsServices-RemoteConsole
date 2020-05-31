@@ -1,6 +1,3 @@
- // mc -U sample.mc
- // rc -r sample.rc
- // link -dll -noentry -out:sample.dll sample.res
  // The following are message definitions.
 //
 //  Values are 32 bit values laid out as follows:
@@ -54,6 +51,15 @@
 // An error has occurred (%2).
 //
 #define SVC_ERROR                        ((DWORD)0xC0020001L)
+
+//
+// MessageId: SVC_NOTICE
+//
+// MessageText:
+//
+// Info from the service: %2
+//
+#define SVC_NOTICE                       ((DWORD)0x40020002L)
 
  // A message file must end with a period on its own line
  // followed by a blank line.
