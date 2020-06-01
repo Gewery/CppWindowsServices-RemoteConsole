@@ -170,15 +170,6 @@ int socket_client(int argc, char* argv[])
     CloseHandle(hSendingThread);
 
 
-    // shutdown the connection since no more data will be sent
-//iResult = shutdown(ConnectSocket, SD_SEND);
-//if (iResult == SOCKET_ERROR) {
-//    printf("shutdown failed with error: %d\n", WSAGetLastError());
-//    closesocket(ConnectSocket);
-//    WSACleanup();
-//    return 1;
-//}
-
     // cleanup
     closesocket(sOutputSocket);
     closesocket(sInputSocket);

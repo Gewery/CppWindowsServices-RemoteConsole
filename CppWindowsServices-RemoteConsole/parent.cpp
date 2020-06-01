@@ -12,6 +12,7 @@
 #include <strsafe.h>
 #include "sample.h"
 #include "parent.h"
+#include "threads.h"
 
 // Need to link with Ws2_32.lib
 #pragma comment (lib, "Ws2_32.lib")
@@ -28,16 +29,14 @@
 VOID WINAPI SvcMain(DWORD dwArgc, LPTSTR* lpszArgv);
 VOID LogError(LPCTSTR szFunction);
 VOID WINAPI SvcCtrlHandler(DWORD dwCtrl);
-DWORD WINAPI sendingResponses(LPVOID sOutputSocket);
-DWORD WINAPI recievingRequests(LPVOID sInputSocket);
 VOID SvcInstall();
 
 #define PIPE_FILE_NAME (LPCWSTR)("input.txt")
 
 FILE* gLog;
+using namespace std;
 
 #define SVCNAME TEXT("AAA_RemoteConsole")
-
 
 class RemoteConsoleService {
 private:
@@ -56,11 +55,12 @@ private:
     SOCKET sClientInputSocket;
     SOCKET sClientOutputSocket;
 
-    HANDLE hSendingThread;
-    HANDLE hRecievingThread;
-
     PROCESS_INFORMATION piProcInfo; // For creation child process
     STARTUPINFO siStartInfo;
+
+    //std::unique_ptr<SendingResponsesThread> responsesThread;
+    class SendingResponsesThread* responsesThread = nullptr;
+    class RecievingRequestsThread* requestsThread = nullptr;
 
     //
     // Purpose: 
@@ -163,7 +163,7 @@ private:
 
         if (NULL != hEventSource)
         {
-            StringCchPrintf(Buffer, 80, TEXT("The log is placed at: %s"), TEXT(LOGPATH));
+            StringCchPrintf(Buffer, 100, TEXT("The log is placed at: %s"), TEXT(LOGPATH));
 
             lpszStrings[0] = SVCNAME;
             lpszStrings[1] = Buffer;
@@ -191,8 +191,6 @@ private:
         CloseHandle(g_hInputFile);
         CloseHandle(ghSvcStopEvent);
         CloseHandle(hEventSource);
-        CloseHandle(hSendingThread);
-        CloseHandle(hRecievingThread);
         CloseHandle(piProcInfo.hProcess);
         CloseHandle(piProcInfo.hThread);
         CloseHandle(siStartInfo.hStdError);
@@ -287,51 +285,30 @@ public:
         if (SocketSetUp(sClientOutputSocket, (char*)DEFAULT_OUTPUT_PORT))
             LogError(TEXT("Output Socket SetUp"));
 
-        printf("Sockets setted up\n");
+        LogError(TEXT("Sockets setted up\n"));
 
         // Setting up threads for communication with client
-        DWORD dwSendingThreadId;
-        hSendingThread = CreateThread(
-            NULL,              // no security attribute 
-            0,                 // default stack size 
-            sendingResponses,    // thread proc
-            (LPVOID)(sClientOutputSocket),    // thread parameter 
-            0,                 // not suspended 
-            &dwSendingThreadId);      // returns thread ID 
-
-        if (hSendingThread == NULL)
-        {
-            LogError(TEXT("CreateThread for sending failed, GLE=%d.\n", GetLastError()));
-            return;
-        }
-
-        DWORD dwRecievingThreadId;
-        hRecievingThread = CreateThread(
-            NULL,              // no security attribute 
-            0,                 // default stack size 
-            recievingRequests,    // thread proc
-            (LPVOID)(sClientInputSocket),    // thread parameter 
-            0,                 // not suspended 
-            &dwRecievingThreadId);      // returns thread ID 
-
-        if (hRecievingThread == NULL)
-        {
-            LogError(TEXT("CreateThread for recieving failed, GLE=%d.\n", GetLastError()));
-            return;
-        }
+        responsesThread = new SendingResponsesThread((LPVOID)sClientOutputSocket);
+        requestsThread = new RecievingRequestsThread((LPVOID)sClientInputSocket);
 
         HANDLE handles[4];
-        handles[0] = hSendingThread;
-        handles[1] = hRecievingThread;
+        handles[0] = responsesThread->hThread;
+        handles[1] = requestsThread->hThread;
         handles[2] = ghSvcStopEvent;
         handles[3] = piProcInfo.hProcess;
 
-        WaitForMultipleObjects(4, handles, false, INFINITE);
-        TerminateProcess(piProcInfo.hProcess, 0);
-        TerminateThread(hSendingThread, 0);
-        TerminateThread(hRecievingThread, 0);
+        DWORD res = WaitForMultipleObjects(4, handles, false, INFINITE);
 
-        LogError(TEXT("\n->End of parent execution.\n"));
+        TerminateProcess(piProcInfo.hProcess, 0);
+        responsesThread->StopThread();
+        requestsThread->StopThread();
+
+        if (res - WAIT_OBJECT_0 <= 1 && WaitForSingleObject(ghSvcStopEvent, 0) != WAIT_OBJECT_0) {
+            LogError(TEXT("Restarting..."));
+            run();
+        }
+
+        LogError(TEXT("\n->End of parent execution."));
         StopService();
         return;
     }
@@ -342,8 +319,8 @@ public:
         SetEvent(gpService->ghSvcStopEvent); // signal service to stop
 
         if (WaitForSingleObject(piProcInfo.hProcess, 1000) == WAIT_TIMEOUT) TerminateProcess(piProcInfo.hProcess, 0);
-        if (WaitForSingleObject(hSendingThread, 1000) == WAIT_TIMEOUT) TerminateThread(hSendingThread, 0);
-        if (WaitForSingleObject(hRecievingThread, 1000) == WAIT_TIMEOUT) TerminateThread(hRecievingThread, 0);
+        responsesThread->StopThread();
+        requestsThread->StopThread();
 
         CloseConnection(sClientOutputSocket);
         CloseConnection(sClientInputSocket);
@@ -405,29 +382,18 @@ public:
     }
 
     void WriteToPipe(CHAR* message, DWORD dwRead)
-
-        // Read from a file and write its contents to the pipe for the child's STDIN.
+        // Write contents of mesage to the pipe for the child's STDIN.
         // Stop when there is no more data. 
     {
         DWORD dwWritten;
         BOOL bSuccess = FALSE;
 
-            //bSuccess = ReadFile(g_hInputFile, message, dwRead, &dwRead, NULL); // input from console
-            //if (!bSuccess || dwRead == 0) break;
-
-            bSuccess = WriteFile(g_hChildStd_IN_Wr, message, dwRead, &dwWritten, NULL);
-            if (!bSuccess) 
-                LogError(TEXT("WriteFile"));
-
-
-        // Close the pipe handle so the child process stops reading. 
-
-        //if (!CloseHandle(g_hChildStd_IN_Wr))
-        //    ErrorExit(TEXT("StdInWr CloseHandle"));
+        bSuccess = WriteFile(g_hChildStd_IN_Wr, message, dwRead, &dwWritten, NULL);
+        if (!bSuccess) 
+            LogError(TEXT("WriteFile"));
     }
     // TODO: choose bool or void
     bool ReadFromPipe(CHAR* message, DWORD* dwRead)
-        // Some comments
     {
         BOOL bSuccess = FALSE;
 
@@ -564,40 +530,46 @@ public:
 
 } *gpService;
 
-DWORD WINAPI sendingResponses(LPVOID sOutputSocket)
-{
+
+DWORD SendingResponsesThread::ThreadWorker() {
+    LogError(TEXT("sendingResponses started"));
     char childbuf[DEFAULT_BUFLEN];
     DWORD childbuflen;
     while (gpService->ReadFromPipe(childbuf, &childbuflen)) {
-        printf("sending something to client\n");
-        gpService->SendMessage((SOCKET)sOutputSocket, childbuf, childbuflen);
+        LogError(TEXT("sending something to client"));
+        gpService->SendMessage((SOCKET)this->threadParameter, childbuf, childbuflen);
         memset(childbuf, 0, sizeof childbuf);
-        printf("->%d bytes sent to the client\n", childbuflen);
+        //printf("->%d bytes sent to the client\n", childbuflen);
+        if (WaitForSingleObject(this->hThreadStopEvent, 0) == WAIT_OBJECT_0) {
+            break;
+        }
     }
-    printf("sendingResponses finished\n");
+    LogError(TEXT("sendingResponses finished"));
     return 0;
 }
 
-DWORD WINAPI recievingRequests(LPVOID sInputSocket)
-{
+
+DWORD RecievingRequestsThread::ThreadWorker() {
+    LogError(TEXT("recievingRequests started"));
     char recvbuf[DEFAULT_BUFLEN];
     int recvbuflen = DEFAULT_BUFLEN;
     int bytesRecieved;
     do {
-        if (gpService->RecieveMessage((SOCKET)sInputSocket, recvbuf, recvbuflen, &bytesRecieved)) //TODO: Recieve all the messages
+        if (gpService->RecieveMessage((SOCKET)this->threadParameter, recvbuf, recvbuflen, &bytesRecieved)) //TODO: Recieve all the messages
             LogError(TEXT("RecieveMessage"));
 
-        printf("message recieved: %s\n", recvbuf);
+        LogError(TEXT("message recieved"));
 
         gpService->WriteToPipe(recvbuf, bytesRecieved);
-        //WriteToPipe((char*)"\n", 1); //TODO: move adding to the client side
 
-        printf("\n->Message %s written to child STDIN pipe.\n", recvbuf);//argv[1]);
+        if (WaitForSingleObject(this->hThreadStopEvent, 0) == WAIT_OBJECT_0) {
+            break;
+        }
+        //printf("\n->Message %s written to child STDIN pipe.\n", recvbuf);//argv[1]);
     } while (bytesRecieved > 0);
-    printf("recievingResponses finished\n");
+    LogError(TEXT("recievingResponses finished"));
     return 0;
 }
-
 
 //
 // Purpose: 
